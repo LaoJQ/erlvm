@@ -1,0 +1,212 @@
+#! /usr/bin/env bash
+
+# Some log function
+function msg_log {
+    [[ -n $1 ]] && echo -e "[erlvm log] $1"
+}
+
+function msg_debug {
+    [[ -n $1 ]] && echo -e "\033[32m[erlvm debug] $1 \033[0m"
+}
+
+function msg_warn {
+    [[ -n $1 ]] && echo -e "\033[33m[erlvm warn] $1 \033[0m"
+}
+
+function msg_error {
+    [[ -n $1 ]] && echo -e "\033[31m[erlvm error] $1 \033[0m"
+}
+
+
+# Some erlvm global variable
+erlvm_root_path=$HOME/.erlvm
+erlvm_bin_path=$erlvm_root_path/bin
+erlvm_pkg_path=$erlvm_root_path/pkg
+erlvm_ver_path=$erlvm_root_path/ver
+erlvm_otp_download_url=http://erlang.org/download
+
+
+# @ERLVM-CMD-DOC + init
+# @ERLVM-CMD-DOC   Init erlvm root path.
+# @ERLVM-CMD-DOC 
+function erlvm_root_path_init() {
+    [[ ! -d $erlvm_pkg_path ]] && mkdir -p $erlvm_pkg_path && msg_log "new path ==> $erlvm_pkg_path"
+    [[ ! -d $erlvm_ver_path ]] && mkdir -p $erlvm_ver_path && msg_log "new path ==> $erlvm_ver_path"
+    msg_debug "erlvm root path '$erlvm_root_path' initialize successfully."
+}
+
+# @ERLVM-CMD-DOC + root-path
+# @ERLVM-CMD-DOC   Show erlvm root path.
+# @ERLVM-CMD-DOC 
+function erlvm_show_root_path() {
+    [[ ! -d $erlvm_ver_path ]] && msg_error "erlvm is not initialized." && exit 1
+    msg_log "erlvm root path: $erlvm_root_path"
+}
+
+# @ERLVM-CMD-DOC + os-deps
+# @ERLVM-CMD-DOC   Install OS(Using Ubuntu) dependences for compiling erlang.
+# @ERLVM-CMD-DOC 
+function erlvm_ensure_os_deps() {
+    sudo apt-get install -y gcc g++ make libncurses5-dev libssl-dev libwxgtk3.0-dev libcanberra-gtk-module
+}
+
+# @ERLVM-CMD-DOC + rels
+# @ERLVM-CMD-DOC   Show available erlang version greater then 17.0. If set falg '--all', show all.
+# @ERLVM-CMD-DOC   argv[0]: --all
+# @ERLVM-CMD-DOC 
+function erlvm_show_releases() {
+    msg_debug "All erlang otp releases:"
+    if [[ $1 == "--all" ]]; then
+        wget -q -O - $erlvm_otp_download_url | grep "^<a href=\"otp_src_[1-9R].*\.tar\.gz" | sed 's/.*otp_src_\(.*\)\.tar\.gz.*/\1/g'
+    else
+        wget -q -O - $erlvm_otp_download_url | grep "^<a href=\"otp_src_[1-9].*\.tar\.gz" | sed 's/.*otp_src_\(.*\)\.tar\.gz.*/\1/g'
+    fi
+}
+
+# @ERLVM-CMD-DOC + download
+# @ERLVM-CMD-DOC   Download otp_src_$VERSION.tar.gz packet.
+# @ERLVM-CMD-DOC   argv[0]: version
+# @ERLVM-CMD-DOC 
+function erlvm_download() {
+    [[ -z $1 ]] && msg_error "no erlang version provided." && exit 1
+    local version=$1
+    erlvm_do_download $version
+}
+
+# Inner function, download a src packet if not exist in local.
+function erlvm_do_download() {
+    local version=$1
+    if [[ -f $erlvm_pkg_path/otp_src_$version.tar.gz ]]; then
+        msg_log "otp_src_$version.tar.gz is already exist."
+    else
+        msg_log "downloading otp_src_$version.tar.gz ..."
+        wget $erlvm_otp_download_url/otp_src_$version.tar.gz -O $erlvm_pkg_path/otp_src_$version.tar.gz
+        msg_log "download otp_src_$version.tar.gz finish."
+    fi
+}
+
+# @ERLVM-CMD-DOC + install
+# @ERLVM-CMD-DOC   Compile and install erlang in special version.
+# @ERLVM-CMD-DOC   argv[0]: version
+# @ERLVM-CMD-DOC 
+function erlvm_install() {
+    [[ -z $1 ]] && msg_error "no erlang version provided." && exit 1
+    local version=$1
+    [[ -d $erlvm_ver_path/otp_$version ]] && msg_warn "Erlang $version is installed before." && exit 1
+    
+    erlvm_do_download $version
+
+    [[ -d $erlvm_pkg_path/otp_src_$version ]] && mv $erlvm_pkg_path/otp_src_$version $erlvm_pkg_path/otp_src_$version-$(date "+%Y%m%d%H%M%S")
+    tar -zxf $erlvm_pkg_path/otp_src_$version.tar.gz -C $erlvm_pkg_path/
+    cd $erlvm_pkg_path/otp_src_$version
+    ./configure --prefix=$erlvm_ver_path/otp_$version/ --enable-builtin-zlib && make && sudo make install
+    [[ $? -eq 0 ]] && msg_debug "install erlang $version successfully."
+}
+
+# @ERLVM-CMD-DOC + installed
+# @ERLVM-CMD-DOC   List all installed erlang version.
+# @ERLVM-CMD-DOC 
+function erlvm_list_all_installed() {
+    [[ ! -d $erlvm_ver_path ]] && msg_error "erlvm is not initialized." && exit 1
+    msg_debug "All version had installed:"
+    local using=$(ls -l $erlvm_bin_path | sed 's/.*\/\(.*\)\/bin/\1/g')
+    for otpv in $(ls $erlvm_ver_path)
+    do
+        if [[ $otpv == $using ]]; then
+            msg_log "$(echo $otpv | sed 's/otp_//') (*using*)"
+        else
+            msg_log $(echo $otpv | sed 's/otp_//')
+        fi
+    done
+}
+
+# @ERLVM-CMD-DOC + uninstall
+# @ERLVM-CMD-DOC   Remove one erlang version.
+# @ERLVM-CMD-DOC   argv[0]: version
+# @ERLVM-CMD-DOC 
+function erlvm_uninstall() {
+    [[ -z $1 ]] && msg_error "no erlang version provided." && exit 1
+    local version=$1
+    local erl_dir=$erlvm_ver_path/otp_$version
+    [[ ! -d $erl_dir ]] && msg_error "Erlang $version is not installed." && exit 1
+    local using=$(ls -l $erlvm_bin_path | sed 's/.*\/otp_\(.*\)\/bin/\1/g')
+    [[ $2 != "--force" ]] && [[ $version == $using ]] && msg_warn "Erlang $version is been using, please switch to other version before." && exit 1
+    rm -rf $erl_dir
+    [[ $? == 0 ]] && msg_debug "Uninstall erlang $version successfully."
+}
+
+# @ERLVM-CMD-DOC + reinstall
+# @ERLVM-CMD-DOC   Re install one erlang version, it will force to uninstall this version, and then install.
+# @ERLVM-CMD-DOC   argv[0]: version
+# @ERLVM-CMD-DOC 
+function erlvm_reinstall() {
+    erlvm_uninstall $1 --force
+    erlvm_install $1
+}
+
+# @ERLVM-CMD-DOC + use
+# @ERLVM-CMD-DOC   Set a erlang version to be used.
+# @ERLVM-CMD-DOC   argv[0]: version
+# @ERLVM-CMD-DOC 
+function erlvm_use() {
+    [[ -z $1 ]] && msg_error "no erlang version provided." && exit 1
+    local version=$1
+    local ver_bin=$erlvm_ver_path/otp_$version/bin
+    [[ ! -d $ver_bin ]] && msg_error "Erlang $version is not installed." && exit 1
+    ln -fsn $ver_bin $erlvm_bin_path
+    [[ $? == 0 ]] && msg_debug "Set use erlang $version"
+}
+
+# @ERLVM-CMD-DOC + using
+# @ERLVM-CMD-DOC   Show current erlang version in used.
+# @ERLVM-CMD-DOC 
+function erlvm_using() {
+    [[ ! -d $erlvm_bin_path ]] && msg_error "no version are used." && exit 1
+    local version=$(ls -l $erlvm_bin_path | sed 's/.*\/otp_\(.*\)\/bin/\1/g')
+    msg_debug "Erlang $version is in used."
+}
+
+# @ERLVM-CMD-DOC + help
+# @ERLVM-CMD-DOC   Show help.
+# @ERLVM-CMD-DOC 
+function erlvm_help() {
+    echo -e "Erlvm is a erlang version manager tool.\n"
+    echo -e "Usage:\n"
+    echo -e "\terlvm <command> [arguments]\n"
+    echo -e "The command are:"
+    cat $erlvm_abs | grep "^# @ERLVM-CMD-DOC" | sed 's/# @ERLVM-CMD-DOC /\t/g'
+}
+
+
+erlvm_abs=$(readlink -f "$0")
+cmd=$1
+shift 1
+case $cmd in
+    init)
+        erlvm_root_path_init;;
+    root-path)
+        erlvm_show_root_path;;
+    os-deps)
+        erlvm_ensure_os_deps;;
+    rels)
+        erlvm_show_releases "$@";;
+    download)
+        erlvm_download "$@";;
+    install)
+        erlvm_install "$@";;
+    installed)
+        erlvm_list_all_installed;;
+    uninstall)
+        erlvm_uninstall "$@";;
+    reinstall)
+        erlvm_reinstall "$@";;
+    use)
+        erlvm_use "$@";;
+    using)
+        erlvm_using;;
+    help)
+        erlvm_help;;
+    *)
+        msg_warn "Invalid command: $cmd"
+        erlvm_help;;
+esac
